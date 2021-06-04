@@ -1,0 +1,654 @@
+<pre class='metadata'>
+Title: Cookbook formulae for audio EQ biquad filter coefficients
+Shortname: cookbook
+Level: 2
+Status: WG-NOTE
+ED: https://github.com/WebAudio/Audio-EQ-Cookbook/
+TR: https://www.w3c.org/TR/webaudio
+Group: audiowg
+Repository: WebAudio/Audio-EQ-Cookbook
+URL: https://github.com/WebAudio/Audio-EQ-Cookbook
+Editor: Raymond Toy, Google (https://www.google.com), rtoy@google.com
+Abstract: A high-level Web  <abbr title="Application Programming Interface">API</abbr>
+        for processing and synthesizing audio in web applications.
+Markup Shorthands: markdown on, dfn on, css off
+</pre>
+<pre class=anchors>
+spec: ECMAScript; url: https://tc39.github.io/ecma262/#sec-data-blocks; type: dfn; text: data block;
+url: https://www.w3.org/TR/mediacapture-streams/#dom-mediadevices-getusermedia; type: method; for: MediaDevices; text: getUserMedia()
+</pre>
+<script>
+window.MathJax = {
+  tex: {
+    // Enable equation numbering and use AMS numbering rules
+    tags: 'ams'
+  },
+  // Note: use \(...\) for inline formulas and $$...$$ for displayed equations.
+  options: {
+    // Tell Mathjax that we want to process formulas in these tags.  The '[-]' means
+    // remove these tags from the default setting.  
+    skipHtmlTags: {'[-]': ['pre']}
+  }
+};
+</script>
+<script id="Mathjax-script" async
+  src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml.js">
+</script>
+<style media="screen">
+  body {
+    width: 45em;
+    margin-left: auto;
+    margin-right: auto;
+    font-size: 16px;
+    line-height: 1.5;
+    font-family: 'Lora', serif;
+  }
+  
+  .label {
+    font-style: italic;
+    color: gray;
+  }
+  
+/*
+  dl {
+      margin: 2em 0;
+      padding: 0;
+  }
+  
+  dt {
+      position: relative;
+      left: 0;
+      top: 1.1em;
+      width: 10em;
+      font-weight: bold;
+  }
+
+  dd {
+      border-left: 1px solid gray;
+      margin: 0 0 0 11em;
+      padding: 0 0 .5em .5em;
+  }
+*/
+</style>
+
+    <h2 id="formulae">Biquad Filter Formulae</h2>
+    
+All filter transfer functions were derived from analog prototypes (that are shown below for each equalizer (EQ) filter type) and had been digitized
+using the Bilinear Transform (BLT). BLT frequency warping has been taken
+into account for both significant frequency relocation (this is the normal
+"prewarping" that is necessary when using the BLT) and for bandwidth
+readjustment (since the bandwidth is compressed when mapped from analog to
+digital using the BLT).
+
+First, given a biquad transfer function defined as:
+<pre>
+  $$
+    \begin{equation}
+      H(z) = \frac{b_0 + b_1z^{-1}+b_2z^{-2}}{a_0 + a_1z^{-1}+a_2z^{-2}}
+    \end{equation}
+  $$
+</pre>
+
+This shows 6 coefficients instead of 5 so, depending on your
+architecture, you will likely normalize \( a_0 \) to be 1 and perhaps also
+\(b_0\) to 1 (and collect that into an overall gain coefficient). Then your
+transfer function would look like:
+<pre>
+  $$
+    \begin{equation}
+      H(z) = \frac{\left(\displaystyle\frac{b_0}{a_0}\right) + \left(\displaystyle\frac{b_1}{a_0}\right)z^{-1}+\left(\displaystyle\frac{b_2}{a_0}\right)z^{-2}}{1 + \left(\displaystyle\frac{a_1}{a_0}\right)z^{-1}+\left(\displaystyle\frac{a_2}{a_0}\right)z^{-2}}
+      \label{direct-form-1}
+    \end{equation}
+  $$
+</pre>
+
+or:
+<pre>
+  $$
+    \begin{equation}
+      H(z) = \left(\frac{b_0}{a_0}\right) \frac{1 + \left(\displaystyle\frac{b_1}{b_0}\right)z^{-1}+\left(\displaystyle\frac{b_2}{b_0}\right)z^{-2}}{1 + \left(\displaystyle\frac{a_1}{a_0}\right)z^{-1}+\left(\displaystyle\frac{a_2}{a_0}\right)z^{-2}}
+    \end{equation}
+  $$
+</pre>
+
+The most straight forward implementation would be the "Direct Form 1"
+(\(eq. \ref{direct-form-1}\)):
+<pre>
+  $$
+    \begin{align}
+    y[n] = \left(\frac{b_0}{a_0}\right)x[n] & +
+    \left(\frac{b_1}{a_0}\right)x[n-1] + \left(\frac{b_2}{a_0}\right)x[n-2]
+    \nonumber \\
+    &amp;-\left(\frac{a_1}{a_0}\right)y[n-1] - \left(\frac{a_2}{a_0}\right)y[n-2]
+    \end{align}
+  $$
+</pre>
+
+This is probably both the best and the easiest method to implement in
+the 56K and other fixed-point or floating-point architectures with a double
+wide accumulator.
+
+Begin with these user defined parameters:
+<dl>
+  <dt>\(F_s\)</dt>
+  <dd>the sampling frequency</dd>
+  <dt>\(f_0\)</dt>
+  <dd>Center Frequency or Corner Frequency, or shelf midpoint frequency,
+  depending on which filter type. The "significant frequency". "wherever
+  it's happenin', man."</dd>
+  <dt>\(\mathrm{dBgain}\)</dt>
+  <dd>used only for peaking and shelving filters</dd>
+  <dt>\(Q\) or \(\mathrm{BW}\) or \(S\)</dt>
+  <dd>
+    <dl>
+      <dt>\(Q\)</dt>
+      <dd>the EE kind of definition, except for peakingEQ in which \(A\cdot
+      Q\) is the classic EE \(Q\). That adjustment in definition was made
+      so that a boost of \(N\) dB followed by a cut of \(N\) dB for
+      identical \(Q\) and \(f_0/F_s\) results in a precisely flat unity
+      gain filter or "wire".</dd>
+      <dt>\(\mathrm{BW}\)</dt>
+      <dd>the bandwidth in octaves (between -3 dB frequencies for BPF and
+      notch or between midpoint (\(\mathrm{dBgain}/2\)) gain frequencies
+      for peaking EQ)</dd>
+      <dt>\(S\)</dt>
+      <dd>a "shelf slope" parameter (for shelving EQ only). When \(S = 1\),
+      the shelf slope is as steep as it can be and remain monotonically
+      increasing or decreasing gain with frequency. The shelf slope, in
+      dB/octave, remains proportional to \(S\) for all other values for a
+      fixed \(f_0/F_s\) and \(\mathrm{dBgain}\).</dd>
+    </dl>
+  </dd>
+</dl>
+
+Then compute a few intermediate variables:
+<ol>
+  <li>
+	  Only for peaking and shelving EQ filters:
+    <pre>
+      $$
+        \begin{align}
+          A &amp;= \sqrt{10^{\mathrm{dBgain}/20}} & \\
+            & = 10^{\mathrm{dBgain}/40} & 
+        \end{align}
+      $$
+</pre>
+  </li>
+  <li>
+    <pre>
+      $$
+        \omega_0 = 2 \pi \frac{f_0}{F_s}
+      $$
+</pre>
+  </li>
+  <li>
+    <pre>
+      $$
+        \begin{align*}
+          & \cos \omega_0 \\
+          & \sin \omega_0
+        \end{align*}
+      $$
+</pre>
+  </li>
+  <li>
+    <pre>
+      $$
+        \begin{align}
+          \alpha &amp;= \frac{\sin \omega_0}{2 Q} & \textrm{(case: Q)} \\
+                 &amp;= \sin \omega_0 \, \sinh\left(\frac{\log 2}{2} \cdot
+                 \mathrm{BW} \cdot 
+                 \frac{\omega_0}{\sin \omega_0}\right) & \textrm{(case: BW)} \\
+                 &amp;= \frac{\sin \omega_0}{2} \sqrt{\left(A +
+                 \frac{1}{A}\right) \left(\frac{1}{S} - 1\right) + 2} & \textrm{(case: S)}
+        \end{align}
+      $$
+</pre>
+  </li>
+</ol>
+
+FYI: The relationship between bandwidth and \(Q\) is
+<p class="label">digital filter with BLT
+<pre>
+  $$
+    \begin{equation}
+      \frac{1}{Q} = 2\sinh\left(\frac{\log 2}{2} \cdot \mathrm{BW} \cdot
+      \frac{\omega_0}{\sin \omega_0}\right)
+    \end{equation}
+  $$
+</pre>
+
+or
+<p class="label">analog filter prototype
+<pre>
+  $$
+    \begin{equation}
+      \frac{1}{Q} = 2 \sinh\left(\frac{\log 2}{2} \cdot \mathrm{BW}\right)
+    \end{equation}
+  $$
+</pre>
+
+The relationship between shelf slope, \(S\), and \(Q\) is
+<pre>
+  $$
+    \begin{equation}
+      \frac{1}{Q} = \sqrt{\left(A + \frac{1}{A}\right) \left(\frac{1}{S} -
+      1\right) + 2}
+    \end{equation}
+  $$
+</pre>
+<pre>
+  $$
+    \begin{equation}
+      2\sqrt{A}\,\alpha = (\sin \omega_0)\, \sqrt{\left(A^2 +
+      1\right)\left(\frac{1}{S}-1\right) + 2A}
+    \end{equation}
+  $$
+</pre>
+
+is a handy intermediate variable for shelving EQ filters.
+
+Finally, compute the coefficients for whichever filter type you
+want:
+
+(The analog prototypes, H(s), are shown for each filter type for
+normalized frequency.)
+<dl>
+  <dt id="LPF-eqn">LPF</dt>
+  <dd>
+    <pre>
+      $$
+        \begin{equation}
+          H(s) = \frac{1}{s^2 + \displaystyle\frac{s}{Q} + 1}
+        \end{equation}
+      $$
+</pre>
+    <pre id="LPF-coef">
+      $$
+        \begin{align}
+          \begin{split}
+            b_0 &amp;= \frac{1-\cos\omega_0}{2} \\
+            b_1 &amp;= 1-\cos\omega_0 \\
+            b_2 &amp;= \frac{1-\cos\omega_0}{2} \\
+            a_0 &amp;= 1 + \alpha \\
+            a_1 &amp;= -2\cos\omega_0 \\
+            a_2 &amp;= 1 - \alpha
+          \end{split}
+        \end{align}
+      $$
+</pre>
+  </dd>
+  <dt id="HPF-eqn">HPF</dt>
+  <dd>
+    <pre>
+      $$
+        \begin{equation}
+          H(s) = \frac{s^2}{s^2 + \displaystyle\frac{s}{Q} + 1}
+        \end{equation}
+      $$
+</pre>
+    <pre id="HPF-coef">
+      $$
+        \begin{align}
+          \begin{split}
+            b_0 &amp;=  \frac{1 + \cos \omega_0}{2} \\
+            b_1 &amp;= -(1 + \cos \omega_0) \\
+            b_2 &amp;=  \frac{1 + \cos \omega_0}{2} \\
+            a_0 &amp;=   1 + \alpha \\
+            a_1 &amp;=  -2\cos \omega_0 \\
+            a_2 &amp;=   1 - \alpha
+          \end{split}
+        \end{align}
+      $$
+</pre>
+  </dd>
+  <dt id="BPF-eqn-constant-skirt-gain">BPF<br>
+  (constant skirt gain,<br>
+  peak gain = \(Q\))</dt>
+  <dd>
+    <pre>
+      $$
+        \begin{equation}
+          H(s) = \frac{s}{s^2 + \displaystyle\frac{s}{Q} + 1}
+        \end{equation}
+      $$
+</pre>
+    <pre id="BPF-coef-constant-skirt-gain">
+      $$
+        \begin{align}
+          \begin{split}
+            b_0 &amp;=   \frac{\sin\omega_0}{2}  =   Q \alpha \\
+            b_1 &amp;=   0 \\
+            b_2 &amp;=  -\frac{\sin\omega_0}{2}  =  -Q \alpha \\
+            a_0 &amp;=   1 + \alpha \\
+            a_1 &amp;=  -2\cos\omega_0 \\
+            a_2 &amp;=   1 - \alpha
+          \end{split}
+        \end{align}
+      $$
+</pre>
+  </dd>
+  <dt id="BPF-eqn-0dB-peak">BPF<br>
+  (constant 0 dB peak gain)</dt>
+  <dd>
+    <pre>
+      $$
+        \begin{equation}
+          H(s) = \frac{\displaystyle\frac{s}{Q}}{s^2 + \displaystyle\frac{s}{Q} + 1}
+        \end{equation}
+      $$
+</pre>
+    <pre id="BPF-coef-0dB-peak">
+      $$
+        \begin{align}
+          \begin{split}
+            b_0 &amp;=   \alpha \\
+            b_1 &amp;=   0 \\
+            b_2 &amp;=  -\alpha \\
+            a_0 &amp;=   1 + \alpha \\
+            a_1 &amp;=  -2\cos \omega_0 \\
+            a_2 &amp;=   1 - \alpha
+          \end{split}
+        \end{align}
+      $$
+</pre>
+  </dd>
+  <dt id="notch-eqn">notch</dt>
+  <dd>
+    <pre>
+      $$
+        \begin{equation}
+          H(s) = \frac{s^2 + 1}{s^2 + \displaystyle\frac{s}{Q} + 1}
+        \end{equation}
+      $$
+</pre>
+    <pre id="notch-coef">
+      $$
+        \begin{align}
+          \begin{split}
+            b_0 &amp;=   1 \\
+            b_1 &amp;=  -2\cos \omega_0 \\
+            b_2 &amp;=   1 \\
+            a_0 &amp;=   1 + \alpha \\
+            a_1 &amp;=  -2\cos \omega_0 \\
+            a_2 &amp;=   1 - \alpha
+          \end{split}
+        \end{align}
+      $$
+</pre>
+  </dd>
+  <dt id="APF-eqn">APF</dt>
+  <dd>
+    <pre>
+      $$
+        \begin{equation}
+          H(s) = \frac{s^2 - \displaystyle\frac{s}{Q} + 1}{s^2 + \displaystyle\frac{s}{Q} + 1}
+        \end{equation}
+      $$
+</pre>
+    <pre id="APF-coef">
+      $$
+        \begin{align}
+          \begin{split}
+            b_0 &amp;=   1 - \alpha \\
+            b_1 &amp;=  -2\cos\omega_0 \\
+            b_2 &amp;=   1 + \alpha \\
+            a_0 &amp;=   1 + \alpha \\
+            a_1 &amp;=  -2\cos\omega_0 \\
+            a_2 &amp;=   1 - \alpha
+          \end{split}
+        \end{align}
+      $$
+</pre>
+  </dd>
+  <dt id="peaking-eqn">peakingEQ</dt>
+  <dd>
+    <pre>
+      $$
+        \begin{equation}
+          H(s) = \frac{s^2 + s\displaystyle\frac{A}{Q} + 1}{s^2 + \displaystyle\frac{s}{AQ} + 1}
+        \end{equation}
+      $$
+</pre>
+    <pre id="peaking-coef">
+      $$
+        \begin{align}
+          \begin{split}
+            b_0 &amp;=   1 + \alpha A \\
+            b_1 &amp;=  -2\cos\omega_0 \\
+            b_2 &amp;=   1 - \alpha A \\
+            a_0 &amp;=   1 + \frac{\alpha}{A} \\
+            a_1 &amp;=  -2\cos\omega_0 \\
+            a_2 &amp;=   1 - \frac{\alpha}{A}
+          \end{split}
+        \end{align}
+      $$
+</pre>
+  </dd>
+  <dt id="lowshelf-eqn">lowShelf</dt>
+  <dd>
+    <pre>
+      $$
+        \begin{equation}
+          H(s) = A \frac{s^2 + \displaystyle\frac{\sqrt{A}}{Q} s + A}
+                        {As^2 + \displaystyle\frac{\sqrt{A}}{Q} s + 1}
+        \end{equation}
+      $$
+</pre>
+    <pre id="lowshelf-coef">
+      $$
+        \begin{align}
+          \begin{split}
+            b_0 &amp;=    A\left( (A+1) - (A-1)\cos\omega_0 + 2\sqrt{A}\, \alpha \right) \\
+            b_1 &amp;=  2A\Big( (A-1) - (A+1)\cos\omega_0                   \Big) \\
+            b_2 &amp;=    A\left( (A+1) - (A-1)\cos\omega_0 - 2\sqrt{A}\, \alpha \right) \\
+            a_0 &amp;=        (A+1) + (A-1)\cos\omega_0 + 2\sqrt{A}\, \alpha \\
+            a_1 &amp;=   -2\Big( (A-1) + (A+1)\cos\omega_0                   \Big) \\
+            a_2 &amp;=        (A+1) + (A-1)\cos\omega_0 - 2\sqrt{A}\, \alpha
+          \end{split}
+        \end{align}
+      $$
+</pre>
+  </dd>
+  <dt id="highshelf-eqn">highShelf</dt>
+  <dd>
+    <pre>
+      $$
+        \begin{equation}
+          H(s) = A \frac{As^2 + \displaystyle\frac{\sqrt{A}}{Q}s + 1}
+                        {s^2 + \displaystyle\frac{\sqrt{A}}{Q} s + A}
+        \end{equation}
+      $$
+</pre>
+    <pre id="highshelf-coef">
+      $$
+        \begin{align}
+          \begin{split}
+            b_0 &amp;=    A\left( (A+1) + (A-1)\cos\omega_0 + 2\sqrt{A}\alpha \right) \\
+            b_1 &amp;= -2A\Big( (A-1) + (A+1)\cos\omega_0                   \Big) \\
+            b_2 &amp;=    A\left( (A+1) + (A-1)\cos\omega_0 - 2\sqrt{A}\alpha \right) \\
+            a_0 &amp;=        (A+1) - (A-1)\cos\omega_0 + 2\sqrt{A}\alpha \\
+            a_1 &amp;=    2\Big( (A-1) - (A+1)\cos\omega_0                   \Big) \\
+            a_2 &amp;=        (A+1) - (A-1)\cos\omega_0 - 2\sqrt{A}\alpha
+          \end{split}
+        \end{align}
+      $$
+</pre>
+  </dd>
+</dl>
+
+FYI: The bilinear transform (with compensation for frequency warping)
+substitutes:
+<p class="label">(normalized)
+<pre>
+  $$
+    \begin{equation}
+      s \leftarrow \frac{1}{\tan\displaystyle\frac{\omega_0}{2}}
+        \times \frac{1-z^{-1}}{1+z^{-1}}
+    \end{equation}
+  $$
+</pre>
+
+and makes use of these trig identities:
+<ol>
+  <li>
+    <pre>
+      $$
+        \begin{equation}
+          \tan\frac{\omega_0}{2} = \frac{\sin\omega_0}{1+\cos\omega_0}
+        \end{equation}
+      $$
+</pre>
+  </li>
+  <li>
+    <pre>
+      $$
+        \begin{equation}
+          \left(\tan\frac{\omega_0}{2}\right)^2 = \frac{1-\cos\omega_0}{1+\cos\omega_0}
+        \end{equation}
+      $$
+</pre>
+  </li>
+</ol>
+
+resulting in these substitutions:
+<ol>
+  <li>
+    <pre>
+      $$
+        \begin{equation}
+          1 \leftarrow \frac{1+\cos\omega_0}{1+\cos\omega_0}
+            \times \frac{1+2z^{-1}+z^{-2}}{1+2z^{-1}+z^{-2}}
+        \end{equation}
+      $$
+</pre>
+  </li>
+  <li>
+    <pre>
+      $$
+        \begin{align}
+          s \leftarrow & \, \frac{1+\cos\omega_0}{\sin\omega_0} \times
+             \frac{1-z^{-1}}{1+z^{-1}} \\
+            & = \frac{1+\cos\omega_0}{\sin\omega_0} \times \frac{1-z^{-2}}{1+2z^{-1}+z^{-2}}
+        \end{align}
+      $$
+</pre>
+  </li>
+  <li>
+    <pre>
+      $$
+        \begin{equation}
+          s^2 \leftarrow \frac{1+\cos\omega_0}{1-\cos\omega_0}
+            \times \frac{1-2z^{-1}+z^{-2}}{1+2z^{-1}+z^{-2}}
+        \end{equation}
+      $$
+</pre>
+  </li>
+</ol>
+
+The factor:
+<pre>
+  $$
+    \begin{equation}
+      \frac{1+\cos\omega_0}{1+2z^{-1}+z^{-2}}
+    \end{equation}
+  $$
+</pre>
+
+is common to all terms in both numerator and denominator, can be
+factored out, and thus be left out in the substitutions above resulting
+in:
+<ol>
+  <li>
+    <pre>
+      $$
+        \begin{equation}
+          1 \leftarrow \frac{1+2z^{-1}+z^{-2}}{1+\cos\omega_0}
+        \end{equation}
+      $$
+</pre>
+  </li>
+  <li>
+    <pre>
+      $$
+        \begin{equation}
+          s \leftarrow \frac{1-z^{-2}}{\sin\omega_0}
+        \end{equation}
+      $$
+</pre>
+  </li>
+  <li>
+    <pre>
+      $$
+        \begin{equation}
+          s^2 \leftarrow \frac{1-2z^{-1}+z^{-2}}{1-\cos\omega_0}
+        \end{equation}
+      $$
+</pre>
+  </li>
+</ol>
+
+In addition, all terms, numerator and denominator, can be multiplied by
+a common \(\sin^2\omega_0\) factor, finally resulting in these
+substitutions:
+<ol>
+  <li>
+    <pre>
+      $$
+        \begin{equation}
+          1 \leftarrow (1 + 2z^{-1} + z^{-2}) (1 - \cos\omega_0)
+        \end{equation}
+      $$
+</pre>
+  </li>
+  <li>
+    <pre>
+      $$
+        \begin{equation}
+          s \leftarrow (1-z^{-2})\sin\omega_0
+        \end{equation}
+      $$
+</pre>
+  </li>
+  <li>
+    <pre>
+      $$
+        \begin{equation}
+          s^2 \leftarrow (1 - 2z^{-1} + z^{-2}) (1 + \cos\omega_0)
+        \end{equation}
+      $$
+</pre>
+  </li>
+  <li>
+    <pre>
+      $$
+        \begin{equation}
+          1 + s^2 \leftarrow 2\, (1 - 2\cos\omega_0\,z^{-1} + z^{-2})
+        \end{equation}
+      $$
+</pre>
+  </li>
+</ol>
+
+The biquad coefficient formulae above come out after a little
+simplification.
+  </section>
+  <section id="acknowledgements">
+<h2>Acknowledgements</h2>
+
+Special thanks to <a href="mailto:rbj@audioimagination.com">Robert
+Bristow-Johnson</a> for creating the Audio EQ Cookbook and permitting its
+adaption and use for the Web Audio API.
+
+Thanks to <a href="mailto:peter.krautzberger@mathjax.org">Peter
+Krautzberger</a> for help in adapting these mathematical formulae to
+MathML, and to the whole <a href="https://www.mathjax.org/">MathJax</a>
+team for making the JavaScript extension that makes the use of math on the
+web possible.
+
+Thanks to Peter Jipsen, creator of <a href=
+"http://www1.chapman.edu/~jipsen/mathml/asciimath.html">ASCIIMathML</a>,
+for making it easier to convert ASCII math notation to MathML.
+
+Converted to using TeX formulas instead of MathML by <a href=
+"mailto:toy.raymond@gmail.com">Raymond Toy</a>.
